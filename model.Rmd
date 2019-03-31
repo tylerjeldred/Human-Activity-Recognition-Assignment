@@ -1,0 +1,79 @@
+### Load And Clean The Data ###
+```{r load_and_clean, warning=FALSE}
+
+suppressMessages(require(dplyr))
+
+train_data_file_location <- "pml-training.csv"
+test_data_file_location <- "pml-testing.csv"
+
+train_data <- read.csv(train_data_file_location)
+
+
+attributes_to_convert_to_numeric <- setdiff(
+  names(select_if(train_data, is.factor)),
+  c("user_name", "cvtd_timestamp", "new_window", "classe")
+)
+
+train_data <- train_data %>%
+  mutate_at(attributes_to_convert_to_numeric, as.character) %>%
+  mutate_at(attributes_to_convert_to_numeric, as.numeric)
+
+na_threshold = nrow(train_data)/2
+more_than_half_na <- function(x) sum(is.na(x)) > na_threshold
+
+attributes_to_exclude <- union(
+  names(select_if(train_data, more_than_half_na)), 
+  c("X")
+)
+
+attributes_to_exclude
+
+
+train_data <- train_data %>%
+  select(-one_of(attributes_to_exclude))
+
+head(train_data)
+
+```
+
+### Train The Model ###
+```{r train_model, warning=FALSE, cache=TRUE}
+
+suppressMessages(require(caret))
+
+if(file.exists("rf_model.rda")) {
+    load("rf_model.rda")
+} else {
+    rf_model <- train(classe ~ ., train_data, method="rf", preProcess="pca")
+}
+
+rf_model
+
+```
+
+### Save The Model ###
+```{r save_model}
+
+if(!file.exists("rf_model.rda")) {
+    save(rf_model, file = "rf_model.rda")
+} 
+
+```
+
+### Test The Model ###
+```{r test_model, warning=FALSE, cache=TRUE}
+
+test_data_file_location <- "pml-testing.csv"
+
+test_data <- read.csv(test_data_file_location)
+
+test_data_predictions <- predict(rf_model, test_data)
+
+head(test_data)
+
+nrow(test_data)
+
+#confusionMatrix(test_data_predictions, test_data$classe)
+
+```
+

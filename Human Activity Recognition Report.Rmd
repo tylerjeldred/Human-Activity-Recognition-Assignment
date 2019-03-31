@@ -1,0 +1,196 @@
+---
+title: "Human Activity Recognition on Wearable Device Data Using Random Forests"
+author: "Tyler Eldred"
+date: "3/22/2019"
+output: html_document
+---
+
+### Loading The Data ###
+
+In the code below we load in the two Human Activity Recognition dataset we will be using from Groupware. The first file, "pml-training.csv" is the data we will use to train our data and perform cross validation on, the second file, "pml-testing.csv" is the data we will be performing predictions on at the end of this report.
+
+```{r load, warning=FALSE, cache=TRUE}
+
+suppressMessages(require(dplyr))
+suppressMessages(require(caret))
+suppressMessages(require(knitr))
+
+train_data_file_location <- "pml-training.csv"
+test_data_file_location <- "pml-testing.csv"
+
+train_data_full <- read.csv(train_data_file_location)
+test_data <- read.csv(test_data_file_location)
+
+```
+
+### Sanitizing The Data ###
+
+There are two sanitization operations we perform on this data. The first operation is to take some attributes we have identified as numerical data and convert them from factors to strings to numerics so that they can be processed by our algorithm as the apparent numerical values that they are. In this case, this was all of the factors except "user_name", "cvtd_timestamp", "new_window", and of course "classe".
+
+The second operation was to take any attributes that more than half NA values and throw those out. Had the number of NA values been lower we would have considered imputing them, but because for the attributes that did have NA values the NA values were more than 90 percent of the values, we decided that was insufficient information about these attributes to impute the rest so we would choose not to consider them. An additional value we recognized as not useful was "X" so it has also been excluded.
+
+```{r sanitize, warning=FALSE, cache=TRUE}
+
+attributes_to_convert_to_numeric <- setdiff(
+  names(select_if(train_data_full, is.factor)),
+  c("user_name", "cvtd_timestamp", "new_window", "classe")
+)
+
+train_data_full <- train_data_full %>%
+  mutate_at(attributes_to_convert_to_numeric, as.character) %>%
+  mutate_at(attributes_to_convert_to_numeric, as.numeric)
+
+na_threshold = nrow(train_data_full)/2
+more_than_half_na <- function(x) sum(is.na(x)) > na_threshold
+
+attributes_to_exclude <- union(
+  names(select_if(train_data_full, more_than_half_na)), 
+  c("X")
+)
+
+train_data <- train_data_full %>%
+  select(-one_of(attributes_to_exclude))
+
+```
+
+### Creating K-Folds ###
+
+To perform cross validation for our model we choose to use k-folds. We choose k-fold for being a fairly standard way of partitioning the data for cross validation that was not too computationally expensive and choose 10 since it is a common value for k in k-folds. 
+
+```{r create_folds, warning=FALSE, cache=TRUE}
+
+folds <- createFolds(train_data, k = 10)
+
+```
+
+### Generating The Model and The Accuracies ###
+
+For this report, the two outputs we require for each fold is 1) the model, by which we could make predictions, and 2) the accuracy of that model with respect to the fold so we can estimate our out-of-sample error. So that our code would remain configurable by k value rather than featuring hardcoded operations for each fold, we sought to create functions that would perform our processing for each particular fold so that given a list of folds we could then lapply across to get the outputs we require.
+
+The `generate_model_and_accuracy_from_fold` function takes the fold and creates the data that will be used to train and to test (in this case cross validate) the model. It calls a separate function to perform the actual training and testing. The kid is a unique serial number for each fold that will be helpful when we want to save and load the models.
+
+The `generate_model_and_accuracy_from_sets` function takes the training set, the test set, and the kid, and creates the model and calculates the accuracy. To save on redundant computations when training the model, we save the model off when it is generated (distinguished by it's kid), and we check to see if a file for the model already exists before generating it. Once the model is generated, the calculation of accuracy is left to another function.
+
+The training algorithm we used is the random forest algorithm, choosen here for its popularity and effectiveness in kaggle competitions. For preprocessing we use principal component analysis; knowing next to nothing about the nature of the values measured with some of these wearable attributes, it seems appropriate to normalize and scale the values, which the principal component analysis does, and also eliminate redundant or irrelevant variables, which is what the principal component analysis is used for.
+
+The `generate_accuracy` function performs predictions on the fold using the model that we trained for that fold, and then calculates the accuracy of those predictions from a confusion matrix.
+
+Once we have defined these functions, we simply call `generate_model_and_accuracy_from_fold` for each fold in our list and extract the models and accuracies for each fold, respectively.
+
+```{r generate_models, cache=TRUE}
+
+generate_model_and_accuracy_from_fold <- function(train_data, fold, kid){
+  train_data_set <- train_data[-fold,]
+  test_data_set <- train_data[fold,]
+  
+  generate_model_and_accuracy_from_sets(train_data_set, test_data_set, kid)
+}
+
+generate_model_and_accuracy_from_sets <- function(train_data_set, test_data_set, kid){
+  
+  filename <- paste("rf_model_", kid, ".rda", sep = "")
+  
+  if(file.exists(filename)) {
+    load(filename)
+  } else {
+    set_model <- train(classe ~ ., train_data_set, method="rf", preProcess="pca")
+      
+    if(!file.exists(filename)) {
+        save(set_model, file = filename)
+    }
+  }
+  
+  list(model = set_model, accuracy = generate_accuracy(set_model, test_data_set))
+}
+
+generate_accuracy <- function(set_model, test_data_set){
+  
+  test_data_set_predictions <- predict(set_model, test_data_set)
+  
+  confusionMatrix(test_data_set_predictions, test_data_set$classe)$overall['Accuracy']
+}
+
+models_and_accuracy_list <- lapply(
+  1:length(folds),
+  function(kid) { generate_model_and_accuracy_from_fold(train_data, folds[[kid]], kid) }
+)
+
+rf_models <- lapply(models_and_accuracy_list, function(list_item) list_item$model)
+
+accuracies <- sapply(models_and_accuracy_list, function(list_item) list_item$accuracy)
+
+
+```
+
+### Estimating Accuracy ###
+
+For the folds that we use used in this particular test data, we actually achieved 100% accuracy for each of our cross-validations. This suggests a combination of particularly strong model or predictable sample. We should expect the out of sample error to be higher but if our training set was sufficient large and unbiased compared to the overall data population, we can expect a very low error rate. Additionally, from ten models we can create an aggregate model which should be an additional mitigating factor to the error rate. 
+
+
+```{r plot_accuracy, cache=TRUE}
+
+cross_validation_accuracies <- setNames(
+  accuracies, 
+  c(
+    "Fold 1",
+    "Fold 2", 
+    "Fold 3", 
+    "Fold 4", 
+    "Fold 5", 
+    "Fold 6", 
+    "Fold 7", 
+    "Fold 8", 
+    "Fold 9", 
+    "Fold 10"
+  )
+)
+
+cross_validation_accuracies
+
+```
+
+### Predicting Values From A Combined Model ###
+
+To make predictions on our test data, we take all the models we created from each fold and combine them to a aggregate model. Because we are predicting on classe, which is a factor attribute, an average will not do; instead, we opt for having our models vote. To perform this vote, we get a predicted classe value for each one of our models on the test data (`test_data_predictions`) and then apply a statistical mode function across the predicted values. The result of those predictions for each fold model and the aggregate model for each of the test values can be seen below.
+
+```{r predictions, cache=TRUE}
+
+statistical_mode <- function(values) {
+   values_set <- unique(values)
+   values_set[which.max(tabulate(match(values, values_set)))]
+}
+
+predictions_full <- sapply(
+  rf_models, 
+  function(rf_model) predict(rf_model, test_data)
+)
+
+test_data_predictions <- apply(predictions_full, 1, statistical_mode)
+
+test_data_prediction_results <- as.data.frame(cbind(
+  test_data$problem_id, 
+  test_data_predictions, 
+  predictions_full
+))
+
+test_data_prediction_results <- setNames(
+  test_data_prediction_results, 
+  c(
+    "Problem Id",
+    "Aggregate Prediction", 
+    "Fold 1", 
+    "Fold 2", 
+    "Fold 3", 
+    "Fold 4", 
+    "Fold 5", 
+    "Fold 6", 
+    "Fold 7", 
+    "Fold 8", 
+    "Fold 9", 
+    "Fold 10"
+  )
+)
+
+kable(test_data_prediction_results)
+
+```

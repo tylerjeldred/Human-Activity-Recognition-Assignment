@@ -1,0 +1,86 @@
+### Load And Clean The Data ###
+```{r load_and_clean, warning=FALSE}
+
+suppressMessages(require(dplyr))
+suppressMessages(require(caret))
+
+train_data_file_location <- "pml-training.csv"
+test_data_file_location <- "pml-testing.csv"
+
+train_data_full <- read.csv(train_data_file_location)
+
+
+attributes_to_convert_to_numeric <- setdiff(
+  names(select_if(train_data_full, is.factor)),
+  c("user_name", "cvtd_timestamp", "new_window", "classe")
+)
+
+train_data_full <- train_data_full %>%
+  mutate_at(attributes_to_convert_to_numeric, as.character) %>%
+  mutate_at(attributes_to_convert_to_numeric, as.numeric)
+
+na_threshold = nrow(train_data_full)/2
+more_than_half_na <- function(x) sum(is.na(x)) > na_threshold
+
+attributes_to_exclude <- union(
+  names(select_if(train_data_full, more_than_half_na)), 
+  c("X")
+)
+
+attributes_to_exclude
+
+
+train_data <- train_data_full %>%
+  select(-one_of(attributes_to_exclude))
+
+folds <- createFolds(train_data, k = 10)
+
+```
+
+### Model Generation Function ###
+```{r generate_model_function, cache=TRUE}
+
+generate_model_and_accuracy_from_fold <- function(train_data, fold, kid){
+  train_data_set <- train_data[-fold,]
+  test_data_set <- train_data[fold,]
+  
+  generate_model_and_accuracy_from_sets(train_data_set, test_data_set, kid)
+}
+
+generate_model_and_accuracy_from_sets <- function(train_data_set, test_data_set, kid){
+  
+  filename <- paste("rf_model_", kid, ".rda", sep = "")
+  
+  if(file.exists(filename)) {
+    load(filename)
+  } else {
+    set_model <- train(classe ~ ., train_data_set, method="rf", preProcess="pca")
+      
+    if(!file.exists(filename)) {
+        save(set_model, file = filename)
+    }
+  }
+
+  filename
+  
+  list(model = set_model, accuracy = generate_accuracy(set_model, test_data_set))
+}
+
+generate_accuracy <- function(set_model, test_data_set){
+  
+  test_data_set_predictions <- predict(set_model, test_data_set)
+  
+  confusionMatrix(test_data_set_predictions, test_data_set$classe)$overall['Accuracy']
+}
+
+models_and_accuracy_list <- lapply(
+  1:length(folds),
+  function(kid) { generate_model_and_accuracy_from_fold(train_data, folds[[kid]], kid) }
+)
+
+rf_models <- lapply(models_and_accuracy_list, function(x) x$model)
+
+accuracies <- sapply(models_and_accuracy_list, function(x) x$accuracy)
+
+```
+

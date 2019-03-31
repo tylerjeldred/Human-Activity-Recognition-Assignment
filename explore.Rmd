@@ -1,0 +1,78 @@
+
+### Load and Display Statistics ###
+```{r load_and_display_data}
+
+train_data_file_location <- "pml-training.csv"
+test_data_file_location <- "pml-testing.csv"
+
+train_data <- read.csv(train_data_file_location)
+
+ncol_train_data <- ncol(train_data)
+ncol_train_data
+
+nrow_train_data <- nrow(train_data)
+nrow_train_data
+
+names(train_data)
+
+head(train_data)
+
+```
+
+### Factors ####
+```{r factors, warning=FALSE}
+
+require(dplyr)
+
+sapply(train_data, class)
+
+train_data_factors <- train_data %>% 
+  select_if(is.factor)
+
+names(train_data_factors)
+
+sapply(train_data_factors, unique)
+
+columns_to_convert <- names(select(train_data_factors, -one_of("user_name", "cvtd_timestamp", "new_window", "classe")))
+columns_to_convert
+
+train_data_converted <- train_data %>%
+  mutate_at(columns_to_convert, as.character) %>%
+  mutate_at(columns_to_convert, as.numeric)
+
+sapply(train_data_converted, class)
+
+sapply(select(train_data_converted, columns_to_convert), function(x) head(unique(x)))
+
+
+```
+
+### NA Values ####
+```{r na_values}
+
+Filter(
+  function(x) x > 0, 
+  sapply(train_data, function(y) sum(is.na(y)) )
+)
+
+Filter(
+  function(x) x > 0, 
+  sapply(train_data_converted, function(y) sum(is.na(y)) )
+)
+
+train_data_useful <- train_data_converted %>% 
+  select_if(function(x) sum(is.na(x)) < nrow_train_data/2)
+
+names(train_data_useful)
+
+intersect(names(train_data_useful), columns_to_convert)
+
+ncol(train_data_useful)
+ncol_train_data
+
+Filter(
+  function(x) x > 0, 
+  sapply(train_data_useful, function(y) sum(is.na(y)) )
+)
+
+```
